@@ -120,10 +120,15 @@ class AutonomousSortingSystem:
             self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         else:
             self.logger.info(f"Opening USB Camera on device index {self.camera_index}...")
-            self.cap = cv2.VideoCapture(self.camera_index)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CONFIG.camera.frame_width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CONFIG.camera.frame_height)
-            self.cap.set(cv2.CAP_PROP_FPS, CONFIG.camera.fps)
+            backend = cv2.CAP_V4L2 if sys.platform.startswith("linux") else (cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
+            self.cap = cv2.VideoCapture(self.camera_index, backend)
+            if not self.cap.isOpened() and backend != cv2.CAP_ANY:
+                self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_ANY)
+
+            if self.cap.isOpened():
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CONFIG.camera.frame_width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CONFIG.camera.frame_height)
+                self.cap.set(cv2.CAP_PROP_FPS, CONFIG.camera.fps)
 
         if not self.cap or not self.cap.isOpened():
             self.logger.warning(
@@ -380,6 +385,7 @@ class AutonomousSortingSystem:
         try:
             self.arm.home()
             self.arm.disable_all_servos()
+            self.arm.deinit()
         except Exception as e:
             self.logger.warning(f"Error during arm parking: {e}")
 

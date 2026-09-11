@@ -155,7 +155,7 @@ def set_active_model(model_filename: str):
     cfg_data = {
         "active_model": model_filename,
         "selected_at": datetime.now().isoformat(),
-        "model_path": os.path.join(MODELS_DIR, model_filename),
+        "model_path": os.path.join("models", model_filename).replace("\\", "/"),
     }
 
     try:

@@ -15,19 +15,57 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 WIDTH = 754
 HEIGHT = 550
 
-# Fonts
-WIN_FONTS = os.environ.get("WINDIR", "C:\\Windows") + "\\Fonts"
-FONT_BOLD = os.path.join(WIN_FONTS, "segoeuib.ttf")
-FONT_REG = os.path.join(WIN_FONTS, "segoeui.ttf")
+# Cross-platform Font Resolution (Windows + Linux/JetPack Ubuntu)
+_CACHED_FONTS = {True: None, False: None}
+
+
+def _find_system_font(bold: bool = False):
+    """Find the best available TrueType font on Windows or Linux."""
+    if _CACHED_FONTS[bold] is not None:
+        return _CACHED_FONTS[bold]
+
+    candidates = []
+    windir = os.environ.get("WINDIR") or ("C:\\Windows" if sys.platform.startswith("win") else "")
+    if windir:
+        win_fonts = os.path.join(windir, "Fonts")
+        if bold:
+            candidates.extend([
+                os.path.join(win_fonts, "segoeuib.ttf"),
+                os.path.join(win_fonts, "arialbd.ttf"),
+            ])
+        else:
+            candidates.extend([
+                os.path.join(win_fonts, "segoeui.ttf"),
+                os.path.join(win_fonts, "arial.ttf"),
+            ])
+
+    if bold:
+        candidates.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+        ])
+    else:
+        candidates.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+        ])
+
+    for p in candidates:
+        if os.path.isfile(p):
+            _CACHED_FONTS[bold] = p
+            return p
+    return None
 
 
 def get_font(size: int, bold: bool = False):
-    try:
-        p = FONT_BOLD if bold else FONT_REG
-        if os.path.exists(p):
-            return ImageFont.truetype(p, size)
-    except Exception:
-        pass
+    font_path = _find_system_font(bold=bold)
+    if font_path:
+        try:
+            return ImageFont.truetype(font_path, size)
+        except Exception:
+            pass
     return ImageFont.load_default()
 
 

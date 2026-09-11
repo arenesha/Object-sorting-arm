@@ -62,14 +62,24 @@ class ArmController:
         try:
             # Import Adafruit Blinka / CircuitPython libraries
             import busio
-            from board import SCL, SDA
+            import board
             from adafruit_pca9685 import PCA9685
             from adafruit_motor import servo
 
             logger.info(
-                f"Initializing PCA9685 on I2C bus {CONFIG.i2c.i2c_bus} (address: 0x{CONFIG.i2c.pca9685_address:02X})..."
+                f"Initializing PCA9685 on I2C bus {CONFIG.i2c.i2c_bus} (target address: 0x{CONFIG.i2c.pca9685_address:02X})..."
             )
-            i2c = busio.I2C(SCL, SDA)
+            # Resolve SCL and SDA pins for Jetson 40-pin header (Pins 3 & 5)
+            scl_pin = getattr(board, f"SCL_{CONFIG.i2c.i2c_bus}", None) or getattr(board, "SCL", None)
+            sda_pin = getattr(board, f"SDA_{CONFIG.i2c.i2c_bus}", None) or getattr(board, "SDA", None)
+            if scl_pin is None or sda_pin is None:
+                scl_pin = getattr(board, "SCL", None)
+                sda_pin = getattr(board, "SDA", None)
+
+            if scl_pin is None or sda_pin is None:
+                raise RuntimeError("Could not resolve SCL/SDA pins in Adafruit Blinka for this platform.")
+
+            i2c = busio.I2C(scl_pin, sda_pin)
             self.pca = PCA9685(i2c, address=CONFIG.i2c.pca9685_address)
             self.pca.frequency = CONFIG.i2c.pwm_frequency_hz
 
@@ -88,13 +98,41 @@ class ArmController:
             for joint_name, channel_num in channel_map.items():
                 self.servos[joint_name] = servo.Servo(
                     self.pca.channels[channel_num],
-                    min_pulse=preset.min_pulse_us,
-                    max_pulse=preset.max_pulse_us,
-                    actuation_range=preset.actuation_range_deg,
+                    min_pulse=int(preset.min_pulse_us),
+                    max_pulse=int(preset.max_pulse_us),
+                    actuation_range=int(preset.actuation_range_deg),
                 )
             logger.info("PCA9685 hardware initialized successfully on all 4 channels.")
 
-        except (ImportError, NotImplementedError, FileNotFoundError, OSError, Exception) as err:
+        except PermissionError as perm_err:
+            logger.error(
+                f"[I2C PERMISSION DENIED] Cannot access I2C bus ({perm_err}).\n"
+                "  >> FIX: Add your user to the 'i2c' group on Linux/Jetson:\n"
+                "     sudo usermod -aG i2c $USER\n"
+                "  >> Then log out and log back in, or run with appropriate permissions."
+            )
+            logger.warning("Switching to simulation mode due to permissions error.")
+            self.simulate = True
+
+        except (ImportError, NotImplementedError) as dep_err:
+            logger.info(
+                f"CircuitPython / PCA9685 libraries not installed or unsupported on this OS ({dep_err}). "
+                "Running in software SIMULATION mode."
+            )
+            self.simulate = True
+
+        except OSError as os_err:
+            logger.warning(
+                f"I2C Hardware Error ({os_err}). Possible causes:\n"
+                "  1. PCA9685 not powered (VCC 3.3V / GND from Jetson 40-pin header).\n"
+                "  2. SDA/SCL pins swapped (Jetson Pin 3=SDA, Pin 5=SCL).\n"
+                f"  3. Wrong I2C bus index (current config: bus {CONFIG.i2c.i2c_bus}). Check 'i2cdetect -y -r 1'.\n"
+                f"  4. PCA9685 address is not 0x{CONFIG.i2c.pca9685_address:02X}.\n"
+                "Switching automatically to high-fidelity SIMULATION mode."
+            )
+            self.simulate = True
+
+        except Exception as err:
             logger.warning(
                 f"Physical PCA9685 hardware not accessible ({err}). "
                 "Switching automatically to high-fidelity SIMULATION mode."
@@ -324,6 +362,11 @@ class ArmController:
         """De-energize servos (sets duty cycle to 0) to prevent resting motor heat/jitter."""
         if not self.simulate and self.pca:
             try:
+                for joint_name, s in self.servos.items():
+                    try:
+                        s.fraction = None
+                    except Exception:
+                        pass
                 for channel_idx in [
                     CONFIG.channels.base,
                     CONFIG.channels.shoulder,
@@ -336,3 +379,19 @@ class ArmController:
                 logger.error(f"Error disabling servos: {e}")
         else:
             logger.info("[SIMULATION] All servos disabled.")
+
+    def deinit(self):
+        """Cleanly releases PCA9685 hardware resources and de-energizes servos."""
+        self.disable_all_servos()
+        if not self.simulate and self.pca is not None:
+            try:
+                self.pca.deinit()
+                logger.info("PCA9685 hardware deinitialized cleanly.")
+            except Exception as e:
+                logger.debug(f"Note during PCA9685 deinit: {e}")
+
+    def __del__(self):
+        try:
+            self.deinit()
+        except Exception:
+            pass

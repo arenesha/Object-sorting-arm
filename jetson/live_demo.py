@@ -576,12 +576,46 @@ def create_detector(conf_thresh: float = 0.50) -> Tuple[BaseDetector, str]:
 # ==============================================================================
 # VIDEO CAPTURE HELPER
 # ==============================================================================
-def open_camera_stream(device_idx: int = 0) -> cv2.VideoCapture:
-    """Opens camera with DirectShow on Windows or standard V4L2 on Jetson/Linux."""
-    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+def open_camera_stream(
+    device_idx: int = 0,
+    source_type: str = "usb",
+    sensor_id: int = 0,
+) -> cv2.VideoCapture:
+    """
+    Opens video capture with cross-platform backend selection:
+    - CSI (Jetson): Hardware nvarguscamerasrc via GStreamer (cv2.CAP_GSTREAMER)
+    - USB (Linux/Jetson): Video4Linux2 (cv2.CAP_V4L2) with automatic fallback
+    - USB (Windows): DirectShow (cv2.CAP_DSHOW) to avoid startup delay
+    """
+    if str(source_type).lower() == "csi":
+        CONFIG.camera.sensor_id = sensor_id
+        pipeline = CONFIG.camera.get_gstreamer_pipeline()
+        print(f"[*] Opening Jetson CSI Camera via GStreamer (sensor-id={sensor_id}):")
+        print(f"    {pipeline}")
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        if cap.isOpened():
+            print("[*] CSI Camera stream opened successfully via hardware nvarguscamerasrc.")
+            return cap
+        print("[!] Warning: GStreamer CSI pipeline failed to open. Falling back to USB camera...")
+
+    # Platform-specific backend for USB camera
+    if sys.platform.startswith("win"):
+        backend = cv2.CAP_DSHOW
+    elif sys.platform.startswith("linux"):
+        backend = cv2.CAP_V4L2
+    else:
+        backend = cv2.CAP_ANY
+
     cap = cv2.VideoCapture(device_idx, backend)
+    # If preferred backend failed on Linux/Windows, fallback to CAP_ANY
+    if not cap.isOpened() and backend != cv2.CAP_ANY:
+        cap = cv2.VideoCapture(device_idx, cv2.CAP_ANY)
+
+    # Fallback to device 0 if non-zero device failed
     if not cap.isOpened() and device_idx != 0:
         cap = cv2.VideoCapture(0, backend)
+        if not cap.isOpened() and backend != cv2.CAP_ANY:
+            cap = cv2.VideoCapture(0, cv2.CAP_ANY)
 
     if cap.isOpened():
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
@@ -594,7 +628,13 @@ def open_camera_stream(device_idx: int = 0) -> cv2.VideoCapture:
 # ==============================================================================
 # MAIN LIVE DEMO LOOP
 # ==============================================================================
-def run_live_demo(camera_index: int = 0, conf_threshold: float = 0.50, image_path: Optional[str] = None):
+def run_live_demo(
+    camera_index: int = 0,
+    conf_threshold: float = 0.50,
+    image_path: Optional[str] = None,
+    source_type: str = "usb",
+    sensor_id: int = 0,
+):
     """Main application loop rendering the masked pickup zone and drag simulation."""
     global ACTIVE_DETECTION
 
@@ -622,9 +662,9 @@ def run_live_demo(camera_index: int = 0, conf_threshold: float = 0.50, image_pat
             print(f"[*] Running on static image: {image_path}")
 
     if static_img is None:
-        cap = open_camera_stream(camera_index)
+        cap = open_camera_stream(camera_index, source_type=source_type, sensor_id=sensor_id)
         if not cap.isOpened():
-            print(f"[!] Warning: Camera {camera_index} could not be opened.")
+            print(f"[!] Warning: Camera {camera_index} (source: {source_type}) could not be opened.")
             print("    Creating synthetic background frame for demonstration.")
 
     rx, ry, rw, rh = PICKUP_ROI
@@ -1094,6 +1134,19 @@ if __name__ == "__main__":
         help="Confidence threshold for detection (default: 0.50)",
     )
     parser.add_argument(
+        "--source",
+        type=str,
+        choices=["usb", "csi"],
+        default="usb",
+        help="Camera source: 'usb' (default) or 'csi' (Jetson CSI camera via nvarguscamerasrc GStreamer)",
+    )
+    parser.add_argument(
+        "--sensor-id",
+        type=int,
+        default=0,
+        help="Jetson CSI sensor ID (default: 0 for /dev/nvhost-nvcsi0)",
+    )
+    parser.add_argument(
         "--image",
         type=str,
         default=None,
@@ -1105,4 +1158,6 @@ if __name__ == "__main__":
         camera_index=args.camera,
         conf_threshold=args.conf,
         image_path=args.image,
+        source_type=args.source,
+        sensor_id=args.sensor_id,
     )

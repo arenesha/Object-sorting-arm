@@ -21,7 +21,11 @@ class CameraConfig:
     # USB Camera index (e.g., 0 for /dev/video0)
     device_index: int = 0
     
-    # Capture resolution & frame rate
+    # Native CSI sensor capture resolution (IMX219 / IMX477 native mode)
+    capture_width: int = 1280
+    capture_height: int = 720
+    
+    # Processed frame resolution & frame rate for vision pipeline
     frame_width: int = 640
     frame_height: int = 480
     fps: int = 30
@@ -31,16 +35,34 @@ class CameraConfig:
     flip_method: int = 0  # 0: none, 2: 180 deg rotate
 
     def get_gstreamer_pipeline(self) -> str:
-        """Returns the optimized GStreamer pipeline string for Jetson hardware nvarguscamerasrc."""
+        """Returns the optimized GStreamer pipeline string for Jetson hardware nvarguscamerasrc.
+        
+        Captures at a native CSI sensor mode (1280x720) in hardware NVMM memory,
+        scales down via Jetson's hardware nvvidconv to frame_width x frame_height (640x480),
+        and feeds into OpenCV appsink with max-buffers=1 to eliminate frame latency.
+        """
         return (
             f"nvarguscamerasrc sensor-id={self.sensor_id} ! "
-            f"video/x-raw(memory:NVMM), width=(int){self.frame_width}, height=(int){self.frame_height}, "
+            f"video/x-raw(memory:NVMM), width=(int){self.capture_width}, height=(int){self.capture_height}, "
             f"format=(string)NV12, framerate=(fraction){self.fps}/1 ! "
             f"nvvidconv flip-method={self.flip_method} ! "
             f"video/x-raw, width=(int){self.frame_width}, height=(int){self.frame_height}, format=(string)BGRx ! "
             f"videoconvert ! "
-            f"video/x-raw, format=(string)BGR ! appsink drop=true"
+            f"video/x-raw, format=(string)BGR ! appsink drop=true max-buffers=1"
         )
+
+
+def get_camera_backend(source_type: str = "usb") -> int:
+    """Returns the optimal OpenCV capture backend based on platform and camera type."""
+    import sys
+    import cv2
+    if source_type.lower() == "csi":
+        return cv2.CAP_GSTREAMER
+    if sys.platform.startswith("win"):
+        return cv2.CAP_DSHOW
+    if sys.platform.startswith("linux"):
+        return cv2.CAP_V4L2
+    return cv2.CAP_ANY
 
 
 # ==============================================================================

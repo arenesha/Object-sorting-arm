@@ -128,9 +128,8 @@ class DashboardState:
             pickup_roi=(rx, ry, rw, rh),
         )
 
-    def init_camera(self, cam_idx: int = 0):
-        """Initialize or switch camera capture device using DirectShow on Windows."""
-        self.camera_index = cam_idx
+    def init_camera(self, cam_idx: any = 0):
+        """Initialize or switch camera capture device using cross-platform backends (V4L2 on Linux, DirectShow on Windows, or GStreamer CSI)."""
         if self.camera_cap is not None:
             try:
                 self.camera_cap.release()
@@ -138,10 +137,37 @@ class DashboardState:
                 pass
             self.camera_cap = None
 
-        backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+        if str(cam_idx).lower() == "csi":
+            pipeline = CONFIG.camera.get_gstreamer_pipeline()
+            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self.camera_cap = cap
+                self.camera_source = "csi"
+                self.camera_index = -1
+                self.add_log("[INFO] Jetson CSI Camera initialized via GStreamer (nvarguscamerasrc).")
+                return
+            else:
+                self.add_log("[WARN] CSI Camera pipeline failed to open. Falling back to USB camera 0.")
+                cam_idx = 0
+
+        try:
+            cam_idx = int(cam_idx)
+        except (ValueError, TypeError):
+            cam_idx = 0
+        self.camera_index = cam_idx
+
+        backend = cv2.CAP_V4L2 if sys.platform.startswith("linux") else (cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
         cap = cv2.VideoCapture(cam_idx, backend)
+        if not cap.isOpened() and backend != cv2.CAP_ANY:
+            cap = cv2.VideoCapture(cam_idx, cv2.CAP_ANY)
+
         if not cap.isOpened() and cam_idx != 0:
             cap = cv2.VideoCapture(0, backend)
+            if not cap.isOpened() and backend != cv2.CAP_ANY:
+                cap = cv2.VideoCapture(0, cv2.CAP_ANY)
             if cap.isOpened():
                 self.camera_index = 0
 
@@ -151,7 +177,8 @@ class DashboardState:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self.camera_cap = cap
             self.camera_source = "camera"
-            self.add_log(f"[INFO] Camera {self.camera_index} initialized (DirectShow 640x480).")
+            backend_label = "V4L2" if sys.platform.startswith("linux") else ("DirectShow" if sys.platform.startswith("win") else "Default")
+            self.add_log(f"[INFO] Camera {self.camera_index} initialized ({backend_label} 640x480).")
         else:
             self.add_log(f"[WARN] Camera {cam_idx} could not be opened. Using fallback frames.")
 
@@ -637,13 +664,18 @@ def stop_preview():
 @app.route("/api/cameras", methods=["GET"])
 def get_cameras():
     """Scan and list available camera devices."""
-    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+    backend = cv2.CAP_V4L2 if sys.platform.startswith("linux") else (cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
     cameras = []
+    # Check CSI camera option on Linux / Jetson
+    if sys.platform.startswith("linux"):
+        cameras.append({"index": "csi", "name": "Jetson CSI Camera (nvarguscamerasrc)", "active": (STATE.camera_source == "csi")})
     for idx in range(3):
-        if STATE.camera_cap and STATE.camera_cap.isOpened() and STATE.camera_index == idx:
+        if STATE.camera_cap and STATE.camera_cap.isOpened() and STATE.camera_index == idx and STATE.camera_source != "csi":
             cameras.append({"index": idx, "name": f"Camera {idx} (Active)", "active": True})
             continue
         test_cap = cv2.VideoCapture(idx, backend)
+        if not test_cap.isOpened() and backend != cv2.CAP_ANY:
+            test_cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
         if test_cap.isOpened():
             ret, _ = test_cap.read()
             if ret:
@@ -858,7 +890,7 @@ def upload_model():
     cfg_data = {
         "active_model": file.filename,
         "selected_at": datetime.now().isoformat(),
-        "model_path": target_path,
+        "model_path": os.path.join("models", file.filename).replace("\\", "/"),
     }
     with open(MODELS_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg_data, f, indent=2)
@@ -879,7 +911,7 @@ def select_model():
     cfg_data = {
         "active_model": model_name,
         "selected_at": datetime.now().isoformat(),
-        "model_path": os.path.join(MODELS_DIR, model_name),
+        "model_path": os.path.join("models", model_name).replace("\\", "/"),
     }
     with open(MODELS_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg_data, f, indent=2)

@@ -1,5 +1,5 @@
 {
   "active_model": "yolo_1788941453.pt",
   "selected_at": "2026-09-10T15:36:41.493072",
-  "model_path": "c:\\Users\\Admin\\Documents\\object_sorting\\jetson\\models\\yolo_1788941453.pt"
+  "model_path": "models/yolo_1788941453.pt"
 }
