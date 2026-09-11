@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SORT | ARM AI — Vision & Robotics Dashboard</title>
+  <meta name="description" content="Autonomous object-sorting robotic arm dashboard powered by YOLO and NVIDIA Jetson Orin Nano.">
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300d4ff' stroke-width='2'><polygon points='12 2 2 7 12 12 22 7 12 2'/><polyline points='2 17 12 22 22 17'/><polyline points='2 12 12 17 22 12'/></svg>">
+</head>
+<body>
+  <div class="ambient-orb orb-1"></div>
+  <div class="ambient-orb orb-2"></div>
+  <div class="ambient-orb orb-3"></div>
+  <div class="scan-line"></div>
+
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon-wrap">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+          <polyline points="2 17 12 22 22 17"/>
+          <polyline points="2 12 12 17 22 12"/>
+        </svg>
+        <div class="brand-icon-ring"></div>
+      </div>
+      <div class="brand-text">
+        <span class="brand-title">SORT</span>
+        <span class="brand-divider">|</span>
+        <span class="brand-subtitle">ARM AI</span>
+      </div>
+      <div class="brand-version">v2.1</div>
+    </div>
+    <div class="header-stats">
+      <div class="hstat">
+        <span class="hstat-label">SORTED</span>
+        <span class="hstat-value" id="statTotalSorted">0</span>
+      </div>
+      <div class="hstat-sep"></div>
+      <div class="hstat">
+        <span class="hstat-label">SESSION</span>
+        <span class="hstat-value" id="statSessionTime">00:00</span>
+      </div>
+      <div class="hstat-sep"></div>
+      <div class="hstat">
+        <span class="hstat-label">STATUS</span>
+        <span class="hstat-value" id="statUptime" style="color: var(--accent-green)">LIVE</span>
+      </div>
+    </div>
+    <div class="system-badge">
+      <span class="pulse-dot"></span>
+      <span>JETSON ORIN NANO</span>
+    </div>
+  </header>
+
+  <main class="dashboard-container">
+
+    <div class="col-left">
+      <section class="card camera-feed-card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
+            Live Camera Feed
+          </span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button id="btnLiveCamDemo" class="btn-xs btn-teal-outline" style="padding:3px 8px;font-weight:600;" title="Simulate JetArm Pick & Place on Live Camera Feed">▶ Demo Sort</button>
+            <span id="feedStatusBadge" class="badge badge-off">&#9679; OFFLINE</span>
+          </div>
+        </div>
+        <div class="video-viewport" id="videoViewport">
+          <div class="hud-corner hud-tl"></div>
+          <div class="hud-corner hud-tr"></div>
+          <div class="hud-corner hud-bl"></div>
+          <div class="hud-corner hud-br"></div>
+          <div id="placeholderViewfinder" class="placeholder-viewfinder">
+            <div class="camera-reticle">
+              <div class="reticle-ring ring-outer"></div>
+              <div class="reticle-ring ring-mid"></div>
+              <div class="reticle-dot"></div>
+              <div class="reticle-cross-h"></div>
+              <div class="reticle-cross-v"></div>
+            </div>
+            <div class="placeholder-text">
+              <div class="placeholder-title">CONNECTING FEED</div>
+              <div class="placeholder-sub">Initializing camera &amp; Hiwonder JetArm AI vision...</div>
+            </div>
+          </div>
+          <img id="previewImg" src="" alt="Live Video Feed" style="display: none;">
+          <canvas id="dragOverlayCanvas" width="640" height="480" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: auto; z-index: 5; cursor: default;"></canvas>
+          <div class="video-hud-overlay">
+            <div class="hud-top-info">
+              <span id="hudModelName" class="hud-tag">MODEL: ---</span>
+              <span class="hud-tag">YOLO</span>
+            </div>
+            <div id="dragHintBadge" class="hud-tag" style="display:none;background:rgba(0,212,255,0.15);border-color:var(--accent-cyan);color:#fff;">
+              🖱 DRAG OBJECT TO BINS
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:rgba(10,16,24,0.65);border-radius:4px;margin-top:6px;font-size:11px;color:#8fa3b8;">
+          <span>🤖 <b>Hiwonder JetArm Overlay:</b> Drag detected box to Bins or click Demo Sort</span>
+          <span id="liveArmStatus" style="color:var(--accent-cyan);font-family:monospace;font-weight:600;">IDLE</span>
+        </div>
+        <div class="feed-controls">
+          <div class="camera-select-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <span class="slider-label">VIDEO SOURCE</span>
+            <div style="display:flex;gap:6px;align-items:center;flex:1;justify-content:flex-end;">
+              <select id="cameraSelect" class="coord-input" style="padding:4px 8px;font-size:11px;max-width:180px;">
+                <option value="0">Camera 0 (Default)</option>
+              </select>
+              <button id="btnRefreshCameras" class="btn-xs" title="Scan Cameras" style="padding:4px 7px;">&#8635;</button>
+              <button id="btnSwitchToCamera" class="btn-xs btn-teal-outline" style="display:none;padding:4px 8px;">Switch to Live Cam</button>
+            </div>
+          </div>
+
+          <div class="sort-mode-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <span class="slider-label">SORTING MODE</span>
+            <div class="mode-pill-group" style="display:flex;gap:4px;">
+              <button id="btnModeAuto" class="btn-xs btn-mode active" style="padding:4px 12px;" title="Automatically detect and sort objects with JetArm">⚡ Automatic</button>
+              <button id="btnModeManual" class="btn-xs btn-mode" style="padding:4px 12px;" title="Manual control: Drag object to bin or click Demo Sort">🖱 Manual (Drag / Demo)</button>
+            </div>
+          </div>
+
+          <div class="slider-row">
+            <label class="slider-label">CONFIDENCE</label>
+            <div class="slider-wrap">
+              <input id="confSlider" type="range" min="10" max="95" value="30">
+            </div>
+            <span id="confValueDisplay" class="slider-value">30%</span>
+          </div>
+
+          <div class="feed-buttons">
+            <button id="btnStartPreview" class="btn btn-teal-outline">&#9654; Start Preview</button>
+            <button id="btnStopPreview" class="btn btn-danger-outline" disabled>&#9632; Stop Preview</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card arm-coordinates-card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M4.22 4.22l2.83 2.83m9.9 9.9 2.83 2.83M2 12h4m12 0h4M4.22 19.78l2.83-2.83m9.9-9.9 2.83-2.83"/>
+            </svg>
+            JetArm Coordinates (X, Y, Z)
+          </span>
+          <button id="btnSaveCoords" class="btn-xs btn-accent">&#128190; Save</button>
+        </div>
+        <div class="coord-table-wrap">
+          <table class="coord-table">
+            <thead>
+              <tr>
+                <th class="th-axis">AXIS</th>
+                <th>PICK LOCATION</th>
+                <th>BIN 1 <span class="th-bin-chip bin-chip-1">LEFT</span></th>
+                <th>BIN 2 <span class="th-bin-chip bin-chip-2">CTR</span></th>
+                <th>BIN 3 <span class="th-bin-chip bin-chip-3">RIGHT</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="axis-label">X</td>
+                <td><input type="number" id="coord_pick_x" value="0" class="coord-input"></td>
+                <td><input type="number" id="coord_bin1_x" value="200" class="coord-input coord-bin1"></td>
+                <td><input type="number" id="coord_bin2_x" value="0" class="coord-input coord-bin2"></td>
+                <td><input type="number" id="coord_bin3_x" value="-200" class="coord-input coord-bin3"></td>
+              </tr>
+              <tr>
+                <td class="axis-label">Y</td>
+                <td><input type="number" id="coord_pick_y" value="135" class="coord-input"></td>
+                <td><input type="number" id="coord_bin1_y" value="100" class="coord-input coord-bin1"></td>
+                <td><input type="number" id="coord_bin2_y" value="150" class="coord-input coord-bin2"></td>
+                <td><input type="number" id="coord_bin3_y" value="100" class="coord-input coord-bin3"></td>
+              </tr>
+              <tr>
+                <td class="axis-label">Z</td>
+                <td><input type="number" id="coord_pick_z" value="30" class="coord-input"></td>
+                <td><input type="number" id="coord_bin1_z" value="30" class="coord-input coord-bin1"></td>
+                <td><input type="number" id="coord_bin2_z" value="30" class="coord-input coord-bin2"></td>
+                <td><input type="number" id="coord_bin3_z" value="30" class="coord-input coord-bin3"></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div class="col-right">
+      <section class="card upload-model-card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Upload YOLO Model
+          </span>
+        </div>
+        <div id="dropzone" class="dropzone">
+          <input type="file" id="modelFileInput" accept=".pt,.engine" style="display: none;">
+          <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+            <line x1="12" y1="22.08" x2="12" y2="12"/>
+          </svg>
+          <div class="dropzone-title" id="dropzoneTitle">Drop .pt / .engine file here</div>
+          <div class="dropzone-hint">YOLOv8 / v11 weights &bull; Max 500 MB</div>
+        </div>
+      </section>
+
+      <section class="card available-models-card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <rect x="2" y="3" width="20" height="14" rx="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            Available Models
+          </span>
+          <span id="modelCountBadge" class="count-badge">0 models</span>
+        </div>
+        <div id="modelListContainer" class="model-list">
+          <div class="model-empty-state">
+            <span>No models in /jetson/models/</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card pipeline-control-card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>
+            </svg>
+            Pipeline Control
+          </span>
+        </div>
+        <div class="active-model-box">
+          <div class="active-model-label">ACTIVE MODEL</div>
+          <div id="activeModelDisplay" class="active-model-name">None Selected</div>
+        </div>
+        <div class="mock-arm-row">
+          <div class="mock-arm-info">
+            <span>MOCK ARM (No Hardware)</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="mockArmSwitch" checked>
+            <span class="slider-toggle"></span>
+          </label>
+        </div>
+        <div class="bin-meters">
+          <div class="bin-meter">
+            <span class="bin-meter-label">BIN 1</span>
+            <div class="bin-meter-bar"><div class="bin-meter-fill fill-bin1" id="meterBin1" style="width:0%"></div></div>
+            <span class="bin-meter-count" id="countBin1">0</span>
+          </div>
+          <div class="bin-meter">
+            <span class="bin-meter-label">BIN 2</span>
+            <div class="bin-meter-bar"><div class="bin-meter-fill fill-bin2" id="meterBin2" style="width:0%"></div></div>
+            <span class="bin-meter-count" id="countBin2">0</span>
+          </div>
+          <div class="bin-meter">
+            <span class="bin-meter-label">BIN 3</span>
+            <div class="bin-meter-bar"><div class="bin-meter-fill fill-bin3" id="meterBin3" style="width:0%"></div></div>
+            <span class="bin-meter-count" id="countBin3">0</span>
+          </div>
+        </div>
+        <div id="pipelineStatusBanner" class="pipeline-status-banner status-stopped">
+          &#9679; STOPPED
+        </div>
+        <div class="pipeline-action-buttons">
+          <button id="btnStartSorting" class="btn btn-start-sorting">&#9654; START SORTING</button>
+          <button id="btnStopSorting" class="btn btn-stop-sorting" disabled>&#9632; STOP</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ── ARM SIMULATION CARD ─────────────────────────────────────── -->
+    <section class="card arm-sim-card">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+          </svg>
+          JetArm Live Simulation
+        </span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="simStatusBadge" class="count-badge">IDLE</span>
+          <span id="simObjectLabel" style="font-size:10px;font-family:var(--font-mono);color:var(--accent-cyan);opacity:0.8;"></span>
+          <button id="btnSimDemo" class="btn-xs">&#9654; Demo</button>
+        </div>
+      </div>
+      <canvas id="armSimCanvas" style="width:100%;height:280px;display:block;border-radius:6px;"></canvas>
+      <div class="sim-legend">
+        <div class="sim-legend-item"><span class="sim-dot" style="background:#ffc107"></span>Pick Zone</div>
+        <div class="sim-legend-item"><span class="sim-dot" style="background:#00d4ff"></span>Bin 1</div>
+        <div class="sim-legend-item"><span class="sim-dot" style="background:#00e676"></span>Bin 2</div>
+        <div class="sim-legend-item"><span class="sim-dot" style="background:#ff9800"></span>Bin 3</div>
+        <div class="sim-legend-item"><span class="sim-dot" style="background:rgba(0,212,255,0.4)"></span>Arm Reach</div>
+      </div>
+    </section>
+
+    <section class="card log-terminal-card">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+          Live System Terminal
+        </span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="terminalLogCount" class="count-badge">0 entries</span>
+          <button id="btnClearLogs" class="btn-xs">&#128465; Clear</button>
+        </div>
+      </div>
+      <div id="terminalBox" class="terminal-box">
+        <div class="log-line">
+          <span class="log-prefix">&gt;</span>
+          <span class="log-time">[Boot]</span>
+          <span class="log-info">SORT | ARM AI Dashboard initialized &mdash; Jetson Orin Nano 8GB</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="mappingModal" class="modal-overlay" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <div class="modal-eyebrow">CLASS &rarr; BIN MAPPING</div>
+          <div class="modal-title">Edit: <span id="modalModelName" class="modal-model-name"></span></div>
+        </div>
+        <button id="btnCloseModal" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="mappingList" class="modal-body"></div>
+      <div class="modal-footer">
+        <button id="btnCancelModal" class="btn btn-danger-outline">Cancel</button>
+        <button id="btnSaveMapping" class="btn btn-teal-outline">Save Mappings</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

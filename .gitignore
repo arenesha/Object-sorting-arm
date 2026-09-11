@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# YOLO models (large binaries — exclude from repo)
+jetson/models/*.pt
+jetson/models/*.engine
+
+# Runtime logs
+sort_history.csv
+
+# Test/scratch outputs
+test/output_detected/*.jpg
+scratch_*.png
+test/sample_images/*.jpg
+test/*.jpg
+dashboard_stream_*.jpg

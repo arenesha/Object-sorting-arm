@@ -1,0 +1,12 @@
+# Dependencies for Autonomous Object-Sorting Robotic Arm
+# Target: NVIDIA Jetson Orin Nano (JetPack 5.x / 6.x) & Offline Dev/Testing
+
+# Computer Vision & Math
+opencv-python>=4.8.0
+numpy>=1.22.0
+
+# Hardware control via I2C (PCA9685 PWM driver)
+# Note: On Jetson, install Adafruit-Blinka and adafruit-circuitpython-pca9685
+Adafruit-Blinka>=8.0.0
+adafruit-circuitpython-pca9685>=3.4.0
+adafruit-circuitpython-motor>=3.4.0
