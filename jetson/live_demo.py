@@ -462,10 +462,11 @@ def mouse_callback(event: int, x: int, y: int, flags: int, param: any):
                 print(f"[*] Auto-Sort toggled: {status_str}")
             return
 
-        # Check click inside active detection bounding box to start drag
+        # Check click inside active detection bounding box to start drag (with padding for easy grab)
         if ACTIVE_DETECTION is not None:
             bx, by, bw, bh = ACTIVE_DETECTION.bounding_box
-            if bx <= x <= bx + bw and by <= y <= by + bh:
+            pad = 20
+            if (bx - pad) <= x <= (bx + bw + pad) and (by - pad) <= y <= (by + bh + pad):
                 DRAG_STATE.is_dragging = True
                 DRAG_STATE.drag_start_time = time.time()
                 DRAG_STATE.original_rect = (bx, by, bw, bh)
@@ -481,6 +482,7 @@ def mouse_callback(event: int, x: int, y: int, flags: int, param: any):
                         (bx + bw // 2, by + bh // 2),
                         ACTIVE_DETECTION.class_name,
                         ACTIVE_DETECTION.bin_id,
+                        DRAG_STATE.drag_patch,
                     )
 
     # 2. MOUSE MOVE: Update dragged box coordinates
@@ -914,7 +916,13 @@ def run_live_demo(
             # ------------------------------------------------------------------
             if JETARM is not None:
                 # 1. Automatic Sort on Stable Detection (Debounce)
-                if ACTIVE_DETECTION is not None and not DRAG_STATE.is_dragging and not JETARM.is_running_sequence:
+                if (
+                    ACTIVE_DETECTION is not None
+                    and not DRAG_STATE.is_dragging
+                    and not JETARM.is_running_sequence
+                    and JETARM.state != "TRACK_DRAG"
+                    and time.time() >= getattr(JETARM, "post_sort_cooldown", 0.0)
+                ):
                     if ACTIVE_DETECTION.class_name == JETARM.debounce_class:
                         JETARM.debounce_hits += 1
                         if JETARM.debounce_hits >= JETARM.debounce_required and JETARM.auto_sort_enabled:
@@ -931,7 +939,7 @@ def run_live_demo(
                         JETARM.debounce_class = ACTIVE_DETECTION.class_name
                         JETARM.debounce_hits = 1
                 else:
-                    if not DRAG_STATE.is_dragging and not JETARM.is_running_sequence:
+                    if not DRAG_STATE.is_dragging and not JETARM.is_running_sequence and JETARM.state != "TRACK_DRAG":
                         JETARM.debounce_hits = max(0, JETARM.debounce_hits - 1)
 
                 # 2. Advance Arm Kinematics & Trajectories

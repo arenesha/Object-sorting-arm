@@ -17,6 +17,15 @@ from typing import Callable, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+try:
+    from sound_effects import play_pick_sound, play_place_sound
+except ImportError:
+    try:
+        from jetson.sound_effects import play_pick_sound, play_place_sound
+    except ImportError:
+        def play_pick_sound(): pass
+        def play_place_sound(): pass
+
 
 # ==============================================================================
 # UNIFIED MODERN DARK UI PALETTE & DESIGN SYSTEM (BGR FOR OPENCV)
@@ -258,6 +267,7 @@ class JetArmOverlay:
         self.debounce_hits = 0
         self.debounce_required = 12  # frames of stable detection to auto-trigger sort
         self.auto_sort_enabled = True
+        self.post_sort_cooldown: float = 0.0
 
         # Sort callback hook for external logging (e.g. CSV logger)
         self.on_sort_completed: Optional[Callable[[str, int, float, float], None]] = None
@@ -440,6 +450,7 @@ class JetArmOverlay:
             self.lift_amount = 0.0
             self.grip_progress = 0.0
             self.cycle_count += 1
+            self.post_sort_cooldown = time.time() + 3.0
             return
 
         step = self.sequence[idx]
@@ -451,6 +462,12 @@ class JetArmOverlay:
         self.target_lift = step["lift"]
         self.target_grip = step["grip"]
 
+        # Trigger acoustic feedback on pick and place steps
+        if self.state == "GRIP":
+            play_pick_sound()
+        elif self.state == "RELEASE":
+            play_place_sound()
+
     def _smooth_ease(self, t: float) -> float:
         """Cubic ease in-out for natural biological/mechanical servo acceleration."""
         t = max(0.0, min(1.0, t))
@@ -459,8 +476,15 @@ class JetArmOverlay:
     # ==========================================================================
     # 3. MOUSE DRAG SYNCHRONIZATION HOOKS
     # ==========================================================================
-    def sync_mouse_drag_start(self, drag_center: Tuple[int, int], class_name: str, bin_id: int):
+    def sync_mouse_drag_start(
+        self,
+        drag_center: Tuple[int, int],
+        class_name: str,
+        bin_id: int,
+        patch: Optional[np.ndarray] = None,
+    ):
         """Latch gripper onto the object when user begins manual mouse drag."""
+        play_pick_sound()
         self.is_running_sequence = False
         self.state = "TRACK_DRAG"
         self.grip_progress = 1.0
@@ -473,25 +497,27 @@ class JetArmOverlay:
             "bin_id": bin_id,
             "conf": 0.95,
             "color": colors.get(bin_id, (0, 255, 0)),
+            "patch": patch,
         }
 
     def sync_mouse_drag_update(self, drag_center: Tuple[int, int]):
         """Follow mouse position in real-time with Inverse Kinematics."""
-        if self.state == "TRACK_DRAG":
-            self.tip_x = float(drag_center[0])
-            self.tip_y = float(drag_center[1])
+        self.state = "TRACK_DRAG"
+        self.is_running_sequence = False
+        self.tip_x = float(drag_center[0])
+        self.tip_y = float(drag_center[1])
 
     def sync_mouse_drag_drop(self, dropped_bin: Optional[int]):
         """Handle mouse release: deposit object if in bin or return home."""
-        if self.state != "TRACK_DRAG":
-            return
-
         self.state = "RELEASE"
         self.grip_progress = 0.0
         self.lift_amount = 0.0
         self.carried_object = None
+        self.post_sort_cooldown = time.time() + 3.0
+        self.debounce_hits = 0
 
         if dropped_bin is not None:
+            play_place_sound()
             self.cycle_count += 1
             if self.on_bin_flash:
                 self.on_bin_flash(dropped_bin)
@@ -502,7 +528,7 @@ class JetArmOverlay:
             {
                 "name": "TO_HOME",
                 "to": (hx, hy),
-                "dur": 0.55,
+                "dur": 0.50,
                 "lift": 0.0,
                 "grip": 0.0,
                 "status": "ARM: RETURNING HOME",

@@ -25,6 +25,15 @@ from config import (
     SERVO_LIMITS,
 )
 
+try:
+    from sound_effects import play_pick_sound, play_place_sound
+except ImportError:
+    try:
+        from jetson.sound_effects import play_pick_sound, play_place_sound
+    except ImportError:
+        def play_pick_sound(): pass
+        def play_place_sound(): pass
+
 logger = logging.getLogger("ArmController")
 
 
@@ -306,6 +315,7 @@ class ArmController:
 
             # Step 4: Close gripper (grip object)
             logger.info("Step 4/10: Closing gripper on object")
+            play_pick_sound()
             self.close_gripper()
 
             # Step 5: Lift arm to safe transit height
@@ -333,6 +343,7 @@ class ArmController:
 
             # Step 8: Open gripper (release object into bin)
             logger.info("Step 8/10: Opening gripper to release object")
+            play_place_sound()
             self.open_gripper()
 
             # Step 9: Lift arm, rotate base back, return to home position

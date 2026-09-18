@@ -413,7 +413,14 @@ def generate_video_stream():
                     )
 
                     # Auto-sort on stable detection if arm is idle and auto_sort_enabled is True
-                    if STATE.jetarm and STATE.jetarm.auto_sort_enabled and not STATE.jetarm.is_running_sequence and not STATE.pipeline_running:
+                    if (
+                        STATE.jetarm
+                        and STATE.jetarm.auto_sort_enabled
+                        and not STATE.jetarm.is_running_sequence
+                        and STATE.jetarm.state != "TRACK_DRAG"
+                        and time.time() >= getattr(STATE.jetarm, "post_sort_cooldown", 0.0)
+                        and not STATE.pipeline_running
+                    ):
                         if result.class_name == STATE.jetarm.debounce_class:
                             STATE.jetarm.debounce_hits += 1
                             if STATE.jetarm.debounce_hits >= 12:
@@ -426,7 +433,7 @@ def generate_video_stream():
                         else:
                             STATE.jetarm.debounce_class = result.class_name
                             STATE.jetarm.debounce_hits = 1
-                    elif STATE.jetarm and not STATE.jetarm.is_running_sequence:
+                    elif STATE.jetarm and not STATE.jetarm.is_running_sequence and STATE.jetarm.state != "TRACK_DRAG":
                         STATE.jetarm.debounce_hits = max(0, STATE.jetarm.debounce_hits - 1)
 
             # 8. Advance Arm Kinematics & Draw Hiwonder JetArm
@@ -727,6 +734,7 @@ def simulated_sort():
     class_name = data.get("class_name", "object")
     bin_id = int(data.get("bin_id", 1))
     conf = float(data.get("confidence", 0.95))
+    source = data.get("source", "manual_drag")
 
     STATE.flash_bin_id = bin_id
     STATE.flash_until = time.time() + 1.8
@@ -736,16 +744,22 @@ def simulated_sort():
     )
 
     if STATE.jetarm is not None:
-        rx, ry, rw, rh = CONFIG.vision.roi_pickup_zone
-        center = (rx + rw // 2, ry + rh // 2)
-        if STATE.latest_detection and (time.time() - STATE.latest_detection_time < 1.0):
-            center = STATE.latest_detection.center
-        STATE.jetarm.trigger_sort(
-            pickup_pos=center,
-            bin_id=bin_id,
-            class_name=class_name,
-            conf=conf,
-        )
+        if source == "demo_button":
+            rx, ry, rw, rh = CONFIG.vision.roi_pickup_zone
+            center = (rx + rw // 2, ry + rh // 2)
+            if STATE.latest_detection and (time.time() - STATE.latest_detection_time < 1.0):
+                center = STATE.latest_detection.center
+            STATE.jetarm.trigger_sort(
+                pickup_pos=center,
+                bin_id=bin_id,
+                class_name=class_name,
+                conf=conf,
+            )
+        else:
+            # For manual drag-and-drop, arm was already moved by cursor and returned home.
+            # Prevent auto-sort from immediately re-picking the object.
+            STATE.jetarm.post_sort_cooldown = time.time() + 3.0
+            STATE.jetarm.debounce_hits = 0
 
     try:
         from logger import SortLogger
@@ -761,6 +775,35 @@ def simulated_sort():
         pass
 
     return jsonify({"success": True, "bin_id": bin_id, "class_name": class_name})
+
+
+@app.route("/api/arm/drag", methods=["POST"])
+def arm_drag():
+    """Synchronizes mouse drag with the video stream's JetArm in real-time."""
+    if STATE.jetarm is None:
+        return jsonify({"success": False, "error": "Arm not initialized"}), 400
+
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")  # "start", "move", "drop"
+    x = data.get("x", 0)
+    y = data.get("y", 0)
+
+    if action == "start":
+        class_name = data.get("class_name", "object")
+        bin_id = data.get("bin_id", 1)
+        STATE.jetarm.sync_mouse_drag_start((int(x), int(y)), class_name, int(bin_id))
+    elif action == "move":
+        STATE.jetarm.sync_mouse_drag_update((int(x), int(y)))
+    elif action == "drop":
+        dropped_bin = data.get("dropped_bin")
+        if dropped_bin is not None:
+            try:
+                dropped_bin = int(dropped_bin)
+            except (ValueError, TypeError):
+                dropped_bin = None
+        STATE.jetarm.sync_mouse_drag_drop(dropped_bin)
+
+    return jsonify({"success": True, "state": STATE.jetarm.state})
 
 
 @app.route("/api/preview/switch_to_camera", methods=["POST"])

@@ -62,6 +62,83 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const toastContainer        = document.getElementById('toastContainer');
 
+  // ── Web Audio Sound Effects Engine (Pick & Place) ──────────────────────────
+  let audioCtx = null;
+  let soundEffectsEnabled = true;
+
+  function getAudioCtx() {
+    if (!audioCtx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) {
+        audioCtx = new AudioContext();
+      }
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+    return audioCtx;
+  }
+
+  function playPickSound() {
+    if (!soundEffectsEnabled) return;
+    try {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+
+      // Mechanical servo grip / clamp sound (520Hz -> 1180Hz)
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.exponentialRampToValueAtTime(1180, now + 0.08);
+
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.28, now + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.088);
+    } catch (e) {}
+  }
+
+  function playPlaceSound() {
+    if (!soundEffectsEnabled) return;
+    try {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+
+      // Dual harmonic placement chime (G5 784Hz + C6 1046.5Hz)
+      [784.0, 1046.5].forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now);
+        osc.frequency.exponentialRampToValueAtTime(freq * 0.90, now + 0.15);
+
+        const vol = idx === 0 ? 0.22 : 0.16;
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(vol, now + 0.006);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now);
+        osc.stop(now + 0.155);
+      });
+    } catch (e) {}
+  }
+
+  window._playPickSound = playPickSound;
+  window._playPlaceSound = playPlaceSound;
+
   // ── Toast Notification ────────────────────────────────────────────────────
   function showToast(message, type = 'info', duration = 3500) {
     const toast = document.createElement('div');
@@ -740,6 +817,13 @@ document.addEventListener('DOMContentLoaded', () => {
       stepToPos = [...step.to];
       stepDuration = step.dur;
       stepStartTime = performance.now() / 1000.0;
+
+      // Acoustic feedback on pick and place steps
+      if (step.name === "GRIP") {
+        playPickSound();
+      } else if (step.name === "RELEASE") {
+        playPlaceSound();
+      }
     }
 
     function triggerLiveDemoSort(targetBin, targetClass, targetCenter) {
@@ -827,6 +911,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     setInterval(pollCurrentDetection, 120);
 
+    // ── Real-time Arm Drag Streaming to Backend ─────────────────────────────
+    let isDragSyncInFlight = false;
+    let pendingDragMove = null;
+
+    async function sendArmDrag(payload) {
+      if (payload.action === 'move') {
+        if (isDragSyncInFlight) {
+          pendingDragMove = payload;
+          return;
+        }
+        isDragSyncInFlight = true;
+      }
+      try {
+        await fetch('/api/arm/drag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (err) {
+        // ignore network hiccups
+      } finally {
+        if (payload.action === 'move') {
+          isDragSyncInFlight = false;
+          if (pendingDragMove) {
+            const next = pendingDragMove;
+            pendingDragMove = null;
+            sendArmDrag(next);
+          }
+        }
+      }
+    }
+
     // ── Mouse Drag Events ───────────────────────────────────────────────────
     dragCanvas.addEventListener('mousedown', (e) => {
       if (currentMode !== 'roi' || isRunningSequence) return;
@@ -835,12 +951,22 @@ document.addEventListener('DOMContentLoaded', () => {
       let targetBox = null;
       if (activeDetection && activeDetection.bounding_box) {
         const [bx, by, bw, bh] = activeDetection.bounding_box;
-        if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
-          targetBox = { bx, by, bw, bh, class_name: activeDetection.class_name, confidence: activeDetection.confidence };
+        const pad = 20;
+        if (x >= (bx - pad) && x <= (bx + bw + pad) && y >= (by - pad) && y <= (by + bh + pad)) {
+          targetBox = {
+            bx,
+            by,
+            bw,
+            bh,
+            class_name: activeDetection.class_name,
+            confidence: activeDetection.confidence,
+            bin_id: activeDetection.bin_id || 1,
+          };
         }
       }
 
       if (targetBox) {
+        playPickSound();
         isDragging = true;
         carriedBox = targetBox;
         dragOffset = { x: x - targetBox.bx, y: y - targetBox.by };
@@ -848,9 +974,22 @@ document.addEventListener('DOMContentLoaded', () => {
         dragCanvas.style.cursor = 'grabbing';
         armState = 'TRACK_DRAG';
         armGrip = 1.0;
-        armLift = 0.4;
+        armLift = 0.85;
         armStatusText = `MANUAL SORT: ${targetBox.class_name.toUpperCase()}`;
         if (liveArmStatus) liveArmStatus.textContent = armStatusText;
+
+        const curCx = Math.round(targetBox.bx + targetBox.bw / 2);
+        const curCy = Math.round(targetBox.by + targetBox.bh / 2);
+        armTipX = curCx;
+        armTipY = curCy;
+
+        sendArmDrag({
+          action: 'start',
+          x: curCx,
+          y: curCy,
+          class_name: targetBox.class_name,
+          bin_id: targetBox.bin_id || 1,
+        });
       }
     });
 
@@ -861,7 +1000,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!isDragging) {
         if (!isRunningSequence && activeDetection && activeDetection.bounding_box) {
           const [bx, by, bw, bh] = activeDetection.bounding_box;
-          if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
+          const pad = 20;
+          if (x >= (bx - pad) && x <= (bx + bw + pad) && y >= (by - pad) && y <= (by + bh + pad)) {
             dragCanvas.style.cursor = 'grab';
           } else {
             dragCanvas.style.cursor = 'default';
@@ -872,12 +1012,18 @@ document.addEventListener('DOMContentLoaded', () => {
         dragCurrentPos = { x, y };
         const dragX = x - dragOffset.x;
         const dragY = y - dragOffset.y;
-        const curCx = dragX + carriedBox.bw / 2;
-        const curCy = dragY + carriedBox.bh / 2;
+        const curCx = Math.round(dragX + carriedBox.bw / 2);
+        const curCy = Math.round(dragY + carriedBox.bh / 2);
 
         // Arm wrist tip smoothly follows dragged object
         armTipX = curCx;
         armTipY = curCy;
+
+        sendArmDrag({
+          action: 'move',
+          x: curCx,
+          y: curCy,
+        });
       }
     });
 
@@ -887,8 +1033,8 @@ document.addEventListener('DOMContentLoaded', () => {
       dragCanvas.style.cursor = 'default';
 
       const { x, y } = getCanvasCoords(e);
-      const curCx = (x - dragOffset.x) + carriedBox.bw / 2;
-      const curCy = (y - dragOffset.y) + carriedBox.bh / 2;
+      const curCx = Math.round((x - dragOffset.x) + carriedBox.bw / 2);
+      const curCy = Math.round((y - dragOffset.y) + carriedBox.bh / 2);
 
       let droppedBin = null;
       for (const [binId, binInfo] of Object.entries(binZones)) {
@@ -903,7 +1049,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const conf = carriedBox.confidence;
       carriedBox = null;
 
+      // Notify JetArm on video stream to release and return home
+      sendArmDrag({
+        action: 'drop',
+        x: curCx,
+        y: curCy,
+        dropped_bin: droppedBin,
+      });
+
       if (droppedBin !== null) {
+        playPlaceSound();
         // Successful deposit into bin
         totalSorted += 1;
         binCounts[droppedBin] = (binCounts[droppedBin] || 0) + 1;
@@ -919,7 +1074,7 @@ document.addEventListener('DOMContentLoaded', () => {
           await fetch('/api/simulated_sort', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ class_name: cls, bin_id: droppedBin, confidence: conf })
+            body: JSON.stringify({ class_name: cls, bin_id: droppedBin, confidence: conf, source: 'manual_drag' })
           });
         } catch (err) {
           console.warn('simulated_sort report failed:', err);
@@ -977,7 +1132,7 @@ document.addEventListener('DOMContentLoaded', () => {
               fetch('/api/simulated_sort', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ class_name: cls, bin_id: droppedBin, confidence: 0.95 })
+                body: JSON.stringify({ class_name: cls, bin_id: droppedBin, confidence: 0.95, source: 'manual_drag' })
               }).catch(() => {});
             }
             carriedBox = null;
@@ -1372,7 +1527,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const res = await fetch('/api/simulated_sort', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ class_name: targetCls, bin_id: targetBin, confidence: 0.95 })
+          body: JSON.stringify({
+            class_name: targetCls,
+            bin_id: targetBin,
+            confidence: 0.95,
+            source: 'demo_button'
+          })
         });
         const data = await res.json();
         if (data.success) {
@@ -1552,6 +1712,12 @@ class ArmSimulator {
     this.stepProgress = 0;
     this.stepLift     = s.lift;
     this.stepGrip     = s.grip;
+
+    if (s.name === 'GRIP') {
+      window._playPickSound?.();
+    } else if (s.name === 'RELEASE') {
+      window._playPlaceSound?.();
+    }
 
     if (this.statusBadge) {
       const labels = {
